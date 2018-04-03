@@ -96,6 +96,11 @@ NSData *UINSImagePNGRepresentation(UINSImage *image) {
         return;
     }
     
+    // Don't set image if size is empty, which was causing some favicons to crash
+    if (image.size.width == 0 && image.size.height == 0) {
+        return;
+    }
+    
     [self setObject:image forKey:key];
     
     dispatch_async(_queue, ^{
