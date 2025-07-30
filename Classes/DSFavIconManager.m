@@ -98,6 +98,11 @@ CGSize sizeInPixels(UINSImage *icon) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     downloadHandler(icon);
                 });
+            } else {
+                // Failed to download/process favicon - return placeholder
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    downloadHandler(_placeholder);
+                });
             }
         };
 

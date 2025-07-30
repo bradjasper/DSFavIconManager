@@ -15,28 +15,107 @@ NSData *UINSImagePNGRepresentation(UINSImage *image) {
     return UIImagePNGRepresentation(image);
 
 #else
-    CGImageSourceRef sourceRef = CGImageSourceCreateWithData((__bridge CFDataRef)[image TIFFRepresentation], NULL);
-    CGImageRef imageRef =  CGImageSourceCreateImageAtIndex(sourceRef, 0, NULL);
-    CGImageRef copyImageRef = CGImageCreateCopyWithColorSpace (imageRef, CGColorSpaceCreateDeviceRGB());
+    // Check if image is valid
+    if (!image) {
+        return nil;
+    }
+    
+    // Get TIFF representation
+    NSData *tiffData = [image TIFFRepresentation];
+    if (!tiffData) {
+        NSLog(@"DSFavIconCache: Failed to get TIFF representation from image");
+        return nil;
+    }
+    
+    // Create image source
+    CGImageSourceRef sourceRef = CGImageSourceCreateWithData((__bridge CFDataRef)tiffData, NULL);
+    if (!sourceRef) {
+        NSLog(@"DSFavIconCache: CGImageSourceCreateWithData failed - data might be corrupted");
+        return nil;
+    }
+    
+    // Create image from source
+    CGImageRef imageRef = CGImageSourceCreateImageAtIndex(sourceRef, 0, NULL);
+    if (!imageRef) {
+        NSLog(@"DSFavIconCache: CGImageSourceCreateImageAtIndex failed");
+        CFRelease(sourceRef);
+        return nil;
+    }
+    
+    // Try to create a copy with RGB color space
+    CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
+    CGImageRef copyImageRef = CGImageCreateCopyWithColorSpace(imageRef, rgbColorSpace);
+    CGColorSpaceRelease(rgbColorSpace);
+    
     if (copyImageRef == NULL) {
         // The color space of the image likely to be indexed.
-        CGRect imageRect  = CGRectMake(0, 0, image.size.width, image.size.height);
-        NSUInteger width  = CGImageGetWidth(imageRef);
+        // Try to redraw the image in RGB color space
+        CGRect imageRect = CGRectMake(0, 0, image.size.width, image.size.height);
+        NSUInteger width = CGImageGetWidth(imageRef);
         NSUInteger height = CGImageGetHeight(imageRef);
+        
+        if (width == 0 || height == 0) {
+            NSLog(@"DSFavIconCache: Invalid image dimensions");
+            CFRelease(sourceRef);
+            CGImageRelease(imageRef);
+            return nil;
+        }
+        
         CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB);
-        CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, width * 4, colorSpace, kCGBitmapByteOrderDefault);
+        if (!colorSpace) {
+            CFRelease(sourceRef);
+            CGImageRelease(imageRef);
+            return nil;
+        }
+        
+        CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, width * 4, colorSpace, kCGBitmapByteOrderDefault | kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(colorSpace);
+        
+        if (!context) {
+            NSLog(@"DSFavIconCache: CGBitmapContextCreate failed");
+            CFRelease(sourceRef);
+            CGImageRelease(imageRef);
+            return nil;
+        }
+        
         CGContextDrawImage(context, imageRect, imageRef);
         copyImageRef = CGBitmapContextCreateImage(context);
+        CGContextRelease(context);
+        
+        if (!copyImageRef) {
+            NSLog(@"DSFavIconCache: CGBitmapContextCreateImage failed");
+            CFRelease(sourceRef);
+            CGImageRelease(imageRef);
+            return nil;
+        }
     }
 
+    // Create PNG data
     NSMutableData *data = [NSMutableData new];
     CGImageDestinationRef destination = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)(data), kUTTypePNG, 1, NULL);
-    CGImageDestinationAddImage(destination, copyImageRef, nil);
-    CGImageDestinationFinalize(destination);
     
+    if (!destination) {
+        NSLog(@"DSFavIconCache: CGImageDestinationCreateWithData failed");
+        CFRelease(sourceRef);
+        CGImageRelease(imageRef);
+        CGImageRelease(copyImageRef);
+        return nil;
+    }
+    
+    CGImageDestinationAddImage(destination, copyImageRef, nil);
+    BOOL success = CGImageDestinationFinalize(destination);
+    
+    // Clean up
+    CFRelease(destination);
     CFRelease(sourceRef);
     CGImageRelease(imageRef);
     CGImageRelease(copyImageRef);
+    
+    if (!success || data.length == 0) {
+        NSLog(@"DSFavIconCache: Failed to finalize PNG data");
+        return nil;
+    }
+    
     return data;
 #endif
 }
@@ -82,7 +161,7 @@ NSData *UINSImagePNGRepresentation(UINSImage *image) {
     UINSImage *image = [self objectForKey:key];
     
     if (!image) {
-        NSString *path = [self pathForImage:image key:key];
+        NSString *path = [self pathForImage:nil key:key];
         image = [[UINSImage alloc] initWithContentsOfFile:path];
         if (image) {
             [self setObject:image forKey:key];
@@ -118,7 +197,7 @@ NSData *UINSImagePNGRepresentation(UINSImage *image) {
 - (NSString *)pathForImage:(UINSImage*)image key:(NSString *)key {
     NSString *path = key;
 #if TARGET_OS_IPHONE
-    if (image.scale == 2.0f) {
+    if (image && image.scale == 2.0f) {
         path = [key stringByAppendingString:@"@2x"];
     }
 #endif
